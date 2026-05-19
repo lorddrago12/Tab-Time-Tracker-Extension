@@ -1,19 +1,64 @@
-// popup.js — Tab Time Tracker popup logic
+// popup.js — Tab Time Tracker
 
-const CATEGORY_COLORS = {
-  work:          { bar: '#1D9E75', legend: '#1D9E75' },
-  learning:      { bar: '#378ADD', legend: '#378ADD' },
-  social:        { bar: '#D85A30', legend: '#D85A30' },
-  entertainment: { bar: '#BA7517', legend: '#BA7517' },
-  other:         { bar: '#5F5E5A', legend: '#5F5E5A' }
+// ─── Theme system ─────────────────────────────────────────────────────────────
+
+const THEMES = [
+  'dark', 'catppuccin-mocha', 'catppuccin-latte',
+  'tokyo-night', 'rose-pine', 'gruvbox', 'nord', 'dracula', 'solarized'
+];
+
+// Category colors per theme — [work, learning, social, entertainment, other]
+const THEME_CATEGORY_COLORS = {
+  'dark':              ['#1D9E75','#378ADD','#D85A30','#BA7517','#5F5E5A'],
+  'catppuccin-mocha':  ['#a6e3a1','#89dceb','#f38ba8','#fab387','#6c7086'],
+  'catppuccin-latte':  ['#40a02b','#1e66f5','#d20f39','#fe640b','#9ca0b0'],
+  'tokyo-night':       ['#9ece6a','#7aa2f7','#f7768e','#e0af68','#565f89'],
+  'rose-pine':         ['#31748f','#9ccfd8','#eb6f92','#f6c177','#6e6a86'],
+  'gruvbox':           ['#98971a','#458588','#cc241d','#d79921','#7c6f64'],
+  'nord':              ['#a3be8c','#88c0d0','#bf616a','#ebcb8b','#616e88'],
+  'dracula':           ['#50fa7b','#8be9fd','#ff5555','#ffb86c','#6272a4'],
+  'solarized':         ['#859900','#268bd2','#dc322f','#b58900','#93a1a1'],
 };
 
+function getCategoryColors(theme) {
+  const cols = THEME_CATEGORY_COLORS[theme] || THEME_CATEGORY_COLORS['dark'];
+  return {
+    work:          { bar: cols[0] },
+    learning:      { bar: cols[1] },
+    social:        { bar: cols[2] },
+    entertainment: { bar: cols[3] },
+    other:         { bar: cols[4] },
+  };
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  // Update active swatch
+  document.querySelectorAll('.theme-swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.theme === theme);
+  });
+  // Persist
+  chrome.storage.local.set({ theme });
+  // Re-render charts with new colours
+  const period = document.querySelector('.day-btn.active')?.dataset.period || 'today';
+  render(period);
+}
+
+async function loadTheme() {
+  const result = await chrome.storage.local.get(['theme']);
+  const theme = result.theme && THEMES.includes(result.theme) ? result.theme : 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.querySelectorAll('.theme-swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.theme === theme);
+  });
+  return theme;
+}
+
+// ─── Category labels ──────────────────────────────────────────────────────────
+
 const CATEGORY_LABELS = {
-  work: 'Work',
-  learning: 'Learning',
-  social: 'Social',
-  entertainment: 'Entertainment',
-  other: 'Other'
+  work: 'Work', learning: 'Learning', social: 'Social',
+  entertainment: 'Entertainment', other: 'Other'
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -28,24 +73,19 @@ function formatTime(seconds) {
 
 function getDateKey(date) {
   const d = new Date(date);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 function getTodayKey() { return getDateKey(Date.now()); }
 
 function getFaviconColor(hostname) {
-  // Deterministic color based on first char
   const palettes = [
-    { bg: '#1a3a2a', color: '#4ade80' },
-    { bg: '#1a2a3a', color: '#60a5fa' },
-    { bg: '#3a1a2a', color: '#f472b6' },
-    { bg: '#2a2a1a', color: '#facc15' },
-    { bg: '#2a1a3a', color: '#c084fc' },
-    { bg: '#1a3a3a', color: '#34d399' },
+    { bg: '#1a3a2a', color: '#4ade80' }, { bg: '#1a2a3a', color: '#60a5fa' },
+    { bg: '#3a1a2a', color: '#f472b6' }, { bg: '#2a2a1a', color: '#facc15' },
+    { bg: '#2a1a3a', color: '#c084fc' }, { bg: '#1a3a3a', color: '#34d399' },
     { bg: '#3a2a1a', color: '#fb923c' },
   ];
-  const idx = (hostname.charCodeAt(0) || 0) % palettes.length;
-  return palettes[idx];
+  return palettes[(hostname.charCodeAt(0) || 0) % palettes.length];
 }
 
 // ─── Data fetching ────────────────────────────────────────────────────────────
@@ -53,8 +93,6 @@ function getFaviconColor(hostname) {
 async function getDataForKeys(keys) {
   const storageKeys = keys.map(k => `data_${k}`);
   const result = await chrome.storage.local.get(storageKeys);
-
-  // Merge all days into one aggregated object
   const merged = { sites: {}, total: 0 };
   for (const sk of storageKeys) {
     const day = result[sk];
@@ -65,7 +103,7 @@ async function getDataForKeys(keys) {
         merged.sites[hostname] = { seconds: 0, category: info.category, visits: 0 };
       }
       merged.sites[hostname].seconds += info.seconds || 0;
-      merged.sites[hostname].visits += info.visits || 0;
+      merged.sites[hostname].visits  += info.visits  || 0;
     }
   }
   return merged;
@@ -74,20 +112,10 @@ async function getDataForKeys(keys) {
 function getKeysForPeriod(period) {
   const keys = [];
   const now = new Date();
-  if (period === 'today') {
-    keys.push(getTodayKey());
-  } else if (period === 'week') {
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      keys.push(getDateKey(d));
-    }
-  } else if (period === 'month') {
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      keys.push(getDateKey(d));
-    }
+  const days = period === 'today' ? 1 : period === 'week' ? 7 : 30;
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now); d.setDate(now.getDate() - i);
+    keys.push(getDateKey(d));
   }
   return keys;
 }
@@ -95,82 +123,64 @@ function getKeysForPeriod(period) {
 async function getPreviousPeriodData(period) {
   const keys = [];
   const now = new Date();
-  if (period === 'today') {
-    const d = new Date(now); d.setDate(now.getDate() - 1);
+  const [offset, days] = period === 'today' ? [1,1] : period === 'week' ? [7,7] : [30,30];
+  for (let i = offset; i < offset + days; i++) {
+    const d = new Date(now); d.setDate(now.getDate() - i);
     keys.push(getDateKey(d));
-  } else if (period === 'week') {
-    for (let i = 7; i < 14; i++) {
-      const d = new Date(now); d.setDate(now.getDate() - i);
-      keys.push(getDateKey(d));
-    }
-  } else if (period === 'month') {
-    for (let i = 30; i < 60; i++) {
-      const d = new Date(now); d.setDate(now.getDate() - i);
-      keys.push(getDateKey(d));
-    }
   }
   return getDataForKeys(keys);
 }
 
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
-let currentSort = 'time'; // 'time' | 'alpha'
+let currentSort = 'time';
 
 function renderSummary(data, prevData) {
   const totalSec = data.total;
-  const prevSec = prevData.total;
-  const diff = totalSec - prevSec;
-  const sites = Object.keys(data.sites).length;
+  const prevSec  = prevData.total;
+  const diff     = totalSec - prevSec;
+  const sites     = Object.keys(data.sites).length;
   const prevSites = Object.keys(prevData.sites).length;
-
-  const prodCategories = ['work', 'learning'];
-  const prodSec = Object.values(data.sites)
-    .filter(s => prodCategories.includes(s.category))
-    .reduce((a, s) => a + s.seconds, 0);
+  const prodSec   = Object.values(data.sites)
+    .filter(s => ['work','learning'].includes(s.category))
+    .reduce((a,s) => a + s.seconds, 0);
 
   document.getElementById('stat-total').textContent = formatTime(totalSec);
   document.getElementById('stat-sites').textContent = sites;
-  document.getElementById('stat-prod').textContent = formatTime(prodSec);
+  document.getElementById('stat-prod').textContent  = formatTime(prodSec);
 
-  const periodLabel = { today: 'yesterday', week: 'last week', month: 'last month' };
   const period = document.querySelector('.day-btn.active').dataset.period;
-  const label = periodLabel[period] || 'before';
+  const label  = { today:'yesterday', week:'last week', month:'last month' }[period];
 
-  if (prevSec > 0) {
-    const sign = diff >= 0 ? '+' : '';
-    document.getElementById('stat-total-sub').textContent = `${sign}${formatTime(Math.abs(diff))} vs ${label}`;
-  } else {
-    document.getElementById('stat-total-sub').textContent = 'No previous data';
-  }
+  document.getElementById('stat-total-sub').textContent =
+    prevSec > 0 ? `${diff >= 0 ? '+' : ''}${formatTime(Math.abs(diff))} vs ${label}` : 'No previous data';
 
-  const siteDiff = sites - prevSites;
   document.getElementById('stat-sites-sub').textContent =
-    prevSites > 0 ? `${siteDiff >= 0 ? '+' : ''}${siteDiff} vs ${label}` : `across this period`;
+    prevSites > 0 ? `${sites-prevSites >= 0?'+':''}${sites-prevSites} vs ${label}` : 'across this period';
 
-  const prodPct = totalSec > 0 ? Math.round((prodSec / totalSec) * 100) : 0;
+  const prodPct = totalSec > 0 ? Math.round((prodSec/totalSec)*100) : 0;
   document.getElementById('stat-prod-sub').textContent = `${prodPct}% of total`;
 }
 
 function renderBreakdownBar(data) {
-  const bar = document.getElementById('breakdown-bar');
+  const bar    = document.getElementById('breakdown-bar');
   const legend = document.getElementById('legend');
-  bar.innerHTML = '';
-  legend.innerHTML = '';
+  bar.innerHTML = ''; legend.innerHTML = '';
 
+  const theme   = document.documentElement.getAttribute('data-theme') || 'dark';
+  const COLORS  = getCategoryColors(theme);
   const byCategory = {};
-  for (const [, info] of Object.entries(data.sites)) {
+  for (const [,info] of Object.entries(data.sites)) {
     const cat = info.category || 'other';
     byCategory[cat] = (byCategory[cat] || 0) + info.seconds;
   }
 
   const total = data.total || 1;
-  const order = ['work', 'learning', 'social', 'entertainment', 'other'];
-
-  for (const cat of order) {
+  for (const cat of ['work','learning','social','entertainment','other']) {
     const sec = byCategory[cat] || 0;
     if (sec === 0) continue;
-    const pct = Math.max(1, (sec / total) * 100);
-    const color = CATEGORY_COLORS[cat].bar;
+    const pct   = Math.max(1, (sec/total)*100);
+    const color = COLORS[cat].bar;
 
     const seg = document.createElement('div');
     seg.className = 'bar-seg';
@@ -183,37 +193,32 @@ function renderBreakdownBar(data) {
     item.innerHTML = `<div class="legend-dot" style="background:${color}"></div>${CATEGORY_LABELS[cat]}`;
     legend.appendChild(item);
   }
-
-  if (bar.children.length === 0) {
-    bar.style.background = '#161b22';
-  }
 }
 
 function renderSitesList(data) {
-  const list = document.getElementById('sites-list');
-  const sites = Object.entries(data.sites);
+  const list  = document.getElementById('sites-list');
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const COLORS = getCategoryColors(theme);
+  const sites  = Object.entries(data.sites);
 
   if (sites.length === 0) {
     list.innerHTML = '<div class="empty-state">No data yet — browse around and come back!</div>';
     return;
   }
 
-  // Sort
-  if (currentSort === 'time') {
-    sites.sort((a, b) => b[1].seconds - a[1].seconds);
-  } else {
-    sites.sort((a, b) => a[0].localeCompare(b[0]));
-  }
+  currentSort === 'time'
+    ? sites.sort((a,b) => b[1].seconds - a[1].seconds)
+    : sites.sort((a,b) => a[0].localeCompare(b[0]));
 
-  const top = sites.slice(0, 8);
+  const top    = sites.slice(0, 8);
   const maxSec = top[0]?.[1]?.seconds || 1;
 
   list.innerHTML = '';
   top.forEach(([hostname, info], i) => {
-    const pct = Math.round((info.seconds / maxSec) * 100);
-    const color = CATEGORY_COLORS[info.category || 'other'].bar;
+    const pct         = Math.round((info.seconds / maxSec) * 100);
+    const color       = COLORS[info.category || 'other'].bar;
     const faviconStyle = getFaviconColor(hostname);
-    const letter = hostname.charAt(0).toUpperCase();
+    const letter      = hostname.charAt(0).toUpperCase();
 
     const row = document.createElement('div');
     row.className = 'site-row';
@@ -231,16 +236,16 @@ function renderSitesList(data) {
 }
 
 async function renderLiveTab() {
-  const dot = document.getElementById('live-dot');
+  const dot   = document.getElementById('live-dot');
   const label = document.getElementById('live-label');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url) {
-      const url = new URL(tab.url);
+    if (tab?.url) {
+      const url      = new URL(tab.url);
       const hostname = url.hostname.replace(/^www\./, '');
       if (hostname && !url.href.startsWith('chrome://')) {
         dot.classList.remove('idle');
-        label.innerHTML = `Tracking <strong style="color:#c9d1d9">${hostname}</strong>`;
+        label.innerHTML = `Tracking <strong style="color:var(--text-secondary)">${hostname}</strong>`;
         return;
       }
     }
@@ -257,7 +262,6 @@ async function render(period) {
     getDataForKeys(keys),
     getPreviousPeriodData(period)
   ]);
-
   renderSummary(data, prevData);
   renderBreakdownBar(data);
   renderSitesList(data);
@@ -267,17 +271,16 @@ async function render(period) {
 
 async function exportData() {
   const result = await chrome.storage.local.get(null);
-  const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `tab-time-tracker-${getTodayKey()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const blob   = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+  const url    = URL.createObjectURL(blob);
+  const a      = document.createElement('a');
+  a.href = url; a.download = `tab-time-tracker-${getTodayKey()}.json`;
+  a.click(); URL.revokeObjectURL(url);
 }
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
+// Period buttons
 document.querySelectorAll('.day-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.day-btn').forEach(b => b.classList.remove('active'));
@@ -286,15 +289,31 @@ document.querySelectorAll('.day-btn').forEach(btn => {
   });
 });
 
+// Sort
 document.getElementById('sort-btn').addEventListener('click', () => {
   currentSort = currentSort === 'time' ? 'alpha' : 'time';
-  const period = document.querySelector('.day-btn.active').dataset.period;
-  render(period);
+  render(document.querySelector('.day-btn.active').dataset.period);
 });
 
+// Export
 document.getElementById('export-btn').addEventListener('click', exportData);
+
+// Theme toggle button
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  document.getElementById('theme-panel').classList.toggle('open');
+});
+
+// Theme swatches
+document.querySelectorAll('.theme-swatch').forEach(swatch => {
+  swatch.addEventListener('click', () => {
+    applyTheme(swatch.dataset.theme);
+  });
+});
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-render('today');
-renderLiveTab();
+(async () => {
+  await loadTheme();
+  render('today');
+  renderLiveTab();
+})();

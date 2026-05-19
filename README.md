@@ -19,14 +19,6 @@ Track how long you spend on each website. 100% local, no account, no cloud.
 5. Select this `tab-time-tracker` folder
 6. The extension icon will appear in your toolbar — click it!
 
-## Adding icons
-
-The extension expects icons at `icons/icon16.png`, `icons/icon48.png`, and `icons/icon128.png`.
-
-You can generate simple icons using any image editor, or use a free tool like:
-- https://favicon.io — generate from text/emoji (use a clock emoji ⏱)
-- https://www.canva.com — design something custom
-
 ## File structure
 
 ```

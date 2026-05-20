@@ -558,3 +558,7 @@ body {
 body::-webkit-scrollbar { width: 4px; }
 body::-webkit-scrollbar-track { background: transparent; }
 body::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+
+.site-bar-wrap {
+  overflow: hidden;
+}

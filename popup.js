@@ -1,5 +1,8 @@
 // popup.js — Tab Time Tracker
 
+// Firefox/LibreWolf compatibility
+const api = typeof browser !== 'undefined' ? browser : chrome;
+
 // ─── Theme system ─────────────────────────────────────────────────────────────
 
 const THEMES = [
@@ -38,14 +41,14 @@ function applyTheme(theme) {
     s.classList.toggle('active', s.dataset.theme === theme);
   });
   // Persist
-  chrome.storage.local.set({ theme });
+  api.storage.local.set({ theme });
   // Re-render charts with new colours
   const period = document.querySelector('.day-btn.active')?.dataset.period || 'today';
   render(period);
 }
 
 async function loadTheme() {
-  const result = await chrome.storage.local.get(['theme']);
+  const result = await api.storage.local.get(['theme']);
   const theme = result.theme && THEMES.includes(result.theme) ? result.theme : 'dark';
   document.documentElement.setAttribute('data-theme', theme);
   document.querySelectorAll('.theme-swatch').forEach(s => {
@@ -92,7 +95,7 @@ function getFaviconColor(hostname) {
 
 async function getDataForKeys(keys) {
   const storageKeys = keys.map(k => `data_${k}`);
-  const result = await chrome.storage.local.get(storageKeys);
+  const result = await api.storage.local.get(storageKeys);
   const merged = { sites: {}, total: 0 };
   for (const sk of storageKeys) {
     const day = result[sk];
@@ -239,7 +242,7 @@ async function renderLiveTab() {
   const dot   = document.getElementById('live-dot');
   const label = document.getElementById('live-label');
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
     if (tab?.url) {
       const url      = new URL(tab.url);
       const hostname = url.hostname.replace(/^www\./, '');
@@ -262,6 +265,7 @@ async function render(period) {
     getDataForKeys(keys),
     getPreviousPeriodData(period)
   ]);
+  lastRenderData = data;
   renderSummary(data, prevData);
   renderBreakdownBar(data);
   renderSitesList(data);
@@ -270,7 +274,7 @@ async function render(period) {
 // ─── Export ───────────────────────────────────────────────────────────────────
 
 async function exportData() {
-  const result = await chrome.storage.local.get(null);
+  const result = await api.storage.local.get(null);
   const blob   = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
   const url    = URL.createObjectURL(blob);
   const a      = document.createElement('a');
@@ -289,10 +293,18 @@ document.querySelectorAll('.day-btn').forEach(btn => {
   });
 });
 
-// Sort
-document.getElementById('sort-btn').addEventListener('click', () => {
+// Sort — use cached data to avoid async re-render which can close the popup on Firefox
+let lastRenderData = null;
+
+document.getElementById('sort-btn').addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
   currentSort = currentSort === 'time' ? 'alpha' : 'time';
-  render(document.querySelector('.day-btn.active').dataset.period);
+  if (lastRenderData) {
+    renderSitesList(lastRenderData);
+  } else {
+    render(document.querySelector('.day-btn.active').dataset.period);
+  }
 });
 
 // Export

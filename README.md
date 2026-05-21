@@ -1,4 +1,4 @@
-**# 🕐 Tab Time Tracker
+# 🕐 Tab Time Tracker
 
 > Track how long you spend on each website. 100% local, no account, no cloud.
 

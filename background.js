@@ -52,7 +52,15 @@ async function getSession() {
 
 async function setSession(tabId, url) {
   await api.storage.local.set({
-    _session: { tabId, url, start: Date.now() }
+    _session: { tabId, url, start: Date.now(), heartbeat: Date.now() }
+  });
+}
+
+async function updateHeartbeat() {
+  const session = await getSession();
+  if (!session) return;
+  await api.storage.local.set({
+    _session: { ...session, heartbeat: Date.now() }
   });
 }
 
@@ -72,6 +80,14 @@ async function flushTime() {
 
   const elapsed = Math.floor((Date.now() - session.start) / 1000);
   if (elapsed <= 0) return;
+
+  // If heartbeat is stale by more than 2 minutes, browser was likely closed/restarted
+  // Discard this session to avoid phantom time but keep real long sessions
+  const heartbeatAge = Date.now() - (session.heartbeat || session.start);
+  if (heartbeatAge > 2 * 60 * 1000) {
+    await clearSession();
+    return;
+  }
 
   const storageKey = `data_${getTodayKey()}`;
   const result = await api.storage.local.get([storageKey]);
@@ -166,11 +182,16 @@ api.idle.onStateChanged.addListener(async (state) => {
 // Flush every 30 seconds — also recovers if service worker was sleeping
 api.alarms.create('flush', { periodInMinutes: 0.25 });
 api.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'flush') await flushTime();
+  if (alarm.name === 'flush') {
+    await updateHeartbeat();
+    await flushTime();
+  }
 });
 
 // Startup: pick up the current active tab
 async function initTracking() {
+  // Clear any stale session from previous browser session
+  await clearSession();
   try {
     const tabs = await api.tabs.query({ active: true, currentWindow: true });
     if (tabs.length > 0 && tabs[0].url) {

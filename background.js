@@ -4,9 +4,6 @@
 const api = typeof browser !== 'undefined' ? browser : chrome;
 const IDLE_THRESHOLD = 60;
 
-let activeTabId = null;
-let activeUrl = null;
-let sessionStart = null;
 let isIdle = false;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -36,7 +33,7 @@ function getCategory(hostname) {
   if (!hostname) return 'other';
   const rules = {
     work: ['github.com', 'gitlab.com', 'bitbucket.org', 'jira', 'confluence', 'notion.so', 'linear.app', 'figma.com', 'vercel.com', 'netlify.com', 'docs.google.com', 'sheets.google.com', 'slides.google.com', 'mail.google.com', 'outlook.', 'slack.com', 'trello.com', 'asana.com', 'monday.com'],
-    learning: ['stackoverflow.com', 'developer.mozilla.org', 'medium.com', 'dev.to', 'hashnode.dev', 'coursera.org', 'udemy.com', 'khanacademy.org', 'wikipedia.org', 'docs.', 'learn.'],
+    learning: ['stackoverflow.com', 'developer.mozilla.org', 'medium.com', 'dev.to', 'hashnode.dev', 'coursera.org', 'udemy.com', 'khanacademy.org', 'wikipedia.org', 'docs.', 'learn.', 'freecodecamp.org'],
     social: ['reddit.com', 'twitter.com', 'x.com', 'facebook.com', 'instagram.com', 'linkedin.com', 'discord.com', 'whatsapp.com', 'telegram.org', 'tiktok.com', 'pinterest.com'],
     entertainment: ['youtube.com', 'netflix.com', 'twitch.tv', 'spotify.com', 'primevideo.com', 'disneyplus.com', 'hulu.com', 'crunchyroll.com']
   };
@@ -46,14 +43,34 @@ function getCategory(hostname) {
   return 'other';
 }
 
+// ─── Session stored in storage so it survives service worker restarts ─────────
+
+async function getSession() {
+  const result = await api.storage.local.get(['_session']);
+  return result._session || null;
+}
+
+async function setSession(tabId, url) {
+  await api.storage.local.set({
+    _session: { tabId, url, start: Date.now() }
+  });
+}
+
+async function clearSession() {
+  await api.storage.local.remove(['_session']);
+}
+
 // ─── Core tracking ────────────────────────────────────────────────────────────
 
 async function flushTime() {
-  if (!activeUrl || !sessionStart || isIdle) return;
-  const hostname = getHostname(activeUrl);
+  if (isIdle) return;
+  const session = await getSession();
+  if (!session) return;
+
+  const hostname = getHostname(session.url);
   if (!hostname) return;
 
-  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+  const elapsed = Math.floor((Date.now() - session.start) / 1000);
   if (elapsed <= 0) return;
 
   const storageKey = `data_${getTodayKey()}`;
@@ -67,21 +84,18 @@ async function flushTime() {
   data.total += elapsed;
 
   await api.storage.local.set({ [storageKey]: data });
-  sessionStart = Date.now();
+  // Reset session start so we don't double count
+  await setSession(session.tabId, session.url);
 }
 
 async function startTracking(tabId, url) {
-  await flushTime();
-  activeTabId = tabId;
-  activeUrl = url;
-  sessionStart = Date.now();
+  await flushTime(); // flush previous session first
+  await setSession(tabId, url);
 }
 
 async function stopTracking() {
   await flushTime();
-  activeTabId = null;
-  activeUrl = null;
-  sessionStart = null;
+  await clearSession();
 }
 
 async function markVisit(url) {
@@ -112,7 +126,8 @@ api.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 api.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tabId === activeTabId && tab.url) {
+  const session = await getSession();
+  if (changeInfo.status === 'complete' && tab.url && session && tabId === session.tabId) {
     await startTracking(tabId, tab.url);
   }
 });
@@ -142,14 +157,16 @@ api.idle.onStateChanged.addListener(async (state) => {
     isIdle = true;
   } else {
     isIdle = false;
-    sessionStart = Date.now();
+    // Resume session from storage
+    const session = await getSession();
+    if (session) await setSession(session.tabId, session.url);
   }
 });
 
-// Periodic flush every 30 seconds
-api.alarms.create('flush', { periodInMinutes: 0.5 });
-api.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'flush') flushTime();
+// Flush every 30 seconds — also recovers if service worker was sleeping
+api.alarms.create('flush', { periodInMinutes: 0.25 });
+api.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'flush') await flushTime();
 });
 
 // Startup: pick up the current active tab
@@ -166,6 +183,4 @@ async function initTracking() {
 
 api.runtime.onInstalled.addListener(initTracking);
 api.runtime.onStartup.addListener(initTracking);
-
-// Firefox doesn't always fire onStartup for the background — init immediately too
 initTracking();
